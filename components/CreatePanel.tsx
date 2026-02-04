@@ -690,7 +690,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
                 <input
                   type="range"
                   min="-1"
-                  max="240"
+                  max="600"
                   step="5"
                   value={duration}
                   onChange={(e) => setDuration(Number(e.target.value))}
@@ -1180,7 +1180,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({ onGenerate, isGenerati
               <input
                 type="range"
                 min="-1"
-                max="240"
+                max="600"
                 step="5"
                 value={duration}
                 onChange={(e) => setDuration(Number(e.target.value))}

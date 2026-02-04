@@ -18,7 +18,7 @@ export class LocalStorageProvider implements StorageProvider {
     const filepath = path.join(this.audioDir, key);
     await mkdir(path.dirname(filepath), { recursive: true });
     await writeFile(filepath, data);
-    return `/audio/${key}`;
+    return key;
   }
 
   async getUrl(key: string, _expiresIn?: number): Promise<string> {
