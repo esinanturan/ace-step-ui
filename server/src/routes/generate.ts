@@ -445,6 +445,8 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
           status: aceStatus.status,
           queuePosition: aceStatus.queuePosition,
           etaSeconds: aceStatus.etaSeconds,
+          progress: aceStatus.progress,
+          stage: aceStatus.stage,
           result: aceStatus.result,
           error: aceStatus.error,
         });
@@ -458,6 +460,8 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
     res.json({
       jobId: req.params.jobId,
       status: job.status,
+      progress: undefined,
+      stage: undefined,
       result: job.result && typeof job.result === 'string' ? JSON.parse(job.result) : job.result,
       error: job.error,
     });

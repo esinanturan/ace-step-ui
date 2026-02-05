@@ -597,6 +597,72 @@ export default function App() {
     }
   }, [token]);
 
+  const beginPollingJob = useCallback((jobId: string, tempId: string) => {
+    if (!token) return;
+    if (activeJobsRef.current.has(jobId)) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await generateApi.getStatus(jobId, token);
+        const normalizedProgress = Number.isFinite(Number(status.progress))
+          ? (Number(status.progress) > 1 ? Number(status.progress) / 100 : Number(status.progress))
+          : undefined;
+
+        setSongs(prev => prev.map(s => {
+          if (s.id === tempId) {
+            return {
+              ...s,
+              queuePosition: status.status === 'queued' ? status.queuePosition : undefined,
+              progress: normalizedProgress ?? s.progress,
+              stage: status.stage ?? s.stage,
+            };
+          }
+          return s;
+        }));
+
+        if (status.status === 'succeeded' && status.result) {
+          cleanupJob(jobId, tempId);
+          await refreshSongsList();
+
+          if (window.innerWidth < 768) {
+            setMobileShowList(true);
+          }
+        } else if (status.status === 'failed') {
+          cleanupJob(jobId, tempId);
+          console.error(`Job ${jobId} failed:`, status.error);
+          showToast(`Generation failed: ${status.error || 'Unknown error'}`, 'error');
+        }
+      } catch (pollError) {
+        console.error(`Polling error for job ${jobId}:`, pollError);
+        cleanupJob(jobId, tempId);
+      }
+    }, 2000);
+
+    activeJobsRef.current.set(jobId, { tempId, pollInterval });
+    setActiveJobCount(activeJobsRef.current.size);
+
+    setTimeout(() => {
+      if (activeJobsRef.current.has(jobId)) {
+        console.warn(`Job ${jobId} timed out`);
+        cleanupJob(jobId, tempId);
+        showToast('Generation timed out', 'error');
+      }
+    }, 600000);
+  }, [token, cleanupJob, refreshSongsList]);
+
+  const buildTempSongFromParams = (params: GenerationParams, tempId: string, createdAt?: string) => ({
+    id: tempId,
+    title: params.title || 'Generating...',
+    lyrics: '',
+    style: params.style || params.songDescription || '',
+    coverUrl: 'https://picsum.photos/200/200?blur=10',
+    duration: '--:--',
+    createdAt: createdAt ? new Date(createdAt) : new Date(),
+    isGenerating: true,
+    tags: params.customMode ? ['custom'] : ['simple'],
+    isPublic: true,
+  });
+
   // Handlers
   const handleGenerate = async (params: GenerationParams) => {
     if (!isAuthenticated || !token) {
@@ -683,57 +749,7 @@ export default function App() {
         isFormatCaption: params.isFormatCaption,
       }, token);
 
-      // Poll for completion - each job has its own polling interval
-      const pollInterval = setInterval(async () => {
-        try {
-          const status = await generateApi.getStatus(job.jobId, token);
-          const normalizedProgress = Number.isFinite(Number(status.progress))
-            ? (Number(status.progress) > 1 ? Number(status.progress) / 100 : Number(status.progress))
-            : undefined;
-
-          // Update queue position on the temp song
-          setSongs(prev => prev.map(s => {
-            if (s.id === tempId) {
-              return {
-                ...s,
-                queuePosition: status.status === 'queued' ? status.queuePosition : undefined,
-                progress: normalizedProgress ?? s.progress,
-                stage: status.stage ?? s.stage,
-              };
-            }
-            return s;
-          }));
-
-          if (status.status === 'succeeded' && status.result) {
-            cleanupJob(job.jobId, tempId);
-            await refreshSongsList();
-
-            if (window.innerWidth < 768) {
-              setMobileShowList(true);
-            }
-          } else if (status.status === 'failed') {
-            cleanupJob(job.jobId, tempId);
-            console.error(`Job ${job.jobId} failed:`, status.error);
-            showToast(`Generation failed: ${status.error || 'Unknown error'}`, 'error');
-          }
-        } catch (pollError) {
-          console.error(`Polling error for job ${job.jobId}:`, pollError);
-          cleanupJob(job.jobId, tempId);
-        }
-      }, 2000);
-
-      // Track this job
-      activeJobsRef.current.set(job.jobId, { tempId, pollInterval });
-      setActiveJobCount(activeJobsRef.current.size);
-
-      // Timeout after 10 minutes
-      setTimeout(() => {
-        if (activeJobsRef.current.has(job.jobId)) {
-          console.warn(`Job ${job.jobId} timed out`);
-          cleanupJob(job.jobId, tempId);
-          showToast('Generation timed out', 'error');
-        }
-      }, 600000);
+      beginPollingJob(job.jobId, tempId);
 
     } catch (e) {
       console.error('Generation error:', e);
@@ -746,6 +762,59 @@ export default function App() {
       showToast('Generation failed. Please try again.', 'error');
     }
   };
+
+  // Resume active jobs on refresh so progress keeps updating
+  useEffect(() => {
+    if (!isAuthenticated || !token) return;
+
+    const resumeJobs = async () => {
+      try {
+        const history = await generateApi.getHistory(token);
+        const jobs = Array.isArray(history.jobs) ? history.jobs : [];
+
+        const activeStatuses = new Set(['pending', 'queued', 'running']);
+        const jobsToResume = jobs.filter((job: any) => activeStatuses.has(job.status));
+
+        if (jobsToResume.length === 0) return;
+
+        setSongs(prev => {
+          const existingIds = new Set(prev.map(s => s.id));
+          const next = [...prev];
+
+          for (const job of jobsToResume) {
+            const jobId = job.id || job.jobId;
+            if (!jobId) continue;
+            const tempId = `job_${jobId}`;
+            if (existingIds.has(tempId)) continue;
+
+            const params = (() => {
+              try {
+                if (!job.params) return {};
+                return typeof job.params === 'string' ? JSON.parse(job.params) : job.params;
+              } catch {
+                return {};
+              }
+            })();
+
+            next.unshift(buildTempSongFromParams(params, tempId, job.created_at));
+            existingIds.add(tempId);
+          }
+          return next;
+        });
+
+        for (const job of jobsToResume) {
+          const jobId = job.id || job.jobId;
+          if (!jobId) continue;
+          const tempId = `job_${jobId}`;
+          beginPollingJob(jobId, tempId);
+        }
+      } catch (error) {
+        console.error('Failed to resume jobs:', error);
+      }
+    };
+
+    resumeJobs();
+  }, [isAuthenticated, token, beginPollingJob]);
 
   const togglePlay = () => {
     if (!currentSong) return;

@@ -358,25 +358,16 @@ const SongItem: React.FC<SongItemProps> = ({
                     {song.isGenerating && (
                         <div className="pt-2">
                             <div className="h-1 rounded-full bg-zinc-200/70 dark:bg-white/10 overflow-hidden">
-                                {song.progress !== undefined ? (
-                                    <div
-                                        className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all"
-                                        style={{
-                                            width: `${Math.min(
-                                                100,
-                                                Math.max(0, (song.progress > 1 ? song.progress / 100 : song.progress) * 100)
-                                            )}%`,
-                                        }}
-                                    />
-                                ) : (
-                                    <div className="h-full w-1/3 bg-gradient-to-r from-pink-500 to-purple-600 animate-pulse" />
-                                )}
+                                <div
+                                    className={`h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all ${song.progress === undefined ? 'opacity-40' : ''}`}
+                                    style={{
+                                        width: `${Math.min(
+                                            100,
+                                            Math.max(0, ((song.progress ?? 0) > 1 ? (song.progress ?? 0) / 100 : (song.progress ?? 0)) * 100)
+                                        )}%`,
+                                    }}
+                                />
                             </div>
-                            {song.progress !== undefined && (
-                                <div className="mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    {Math.round((song.progress > 1 ? song.progress / 100 : song.progress) * 100)}%
-                                </div>
-                            )}
                         </div>
                     )}
                 </div>
