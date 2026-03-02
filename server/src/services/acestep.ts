@@ -77,7 +77,7 @@ const SCRIPTS_DIR = path.join(__dirname, '../../scripts');
 const PYTHON_SCRIPT = path.join(SCRIPTS_DIR, 'simple_generate.py');
 
 // ---------------------------------------------------------------------------
-// Gradio generation: map params to the 45 positional args for /generation_wrapper
+// Gradio generation: map params to the 51 positional args for /generation_wrapper
 // ---------------------------------------------------------------------------
 
 /**
@@ -186,16 +186,16 @@ async function buildGradioArgs(params: GenerationParams): Promise<unknown[]> {
     params.constrainedDecodingDebug ?? false,                     // 38: Constrained Decoding Debug
     params.allowLmBatch ?? true,                                  // 39: ParallelThinking
     params.getScores ?? false,                                    // 40: Auto Score
-    // Note: auto_lrc (getLrc) is a hidden Gradio state param — NOT included in the public API args
-    params.scoreScale ?? 0.5,                                     // 41: Quality Score Sensitivity (0.01-1.0)
-    params.lmBatchChunkSize ?? 8,                                 // 42: LM Batch Chunk Size
-    params.trackName || null,                                     // 43: Track Name
-    params.completeTrackClasses || [],                            // 44: Track Names
-    false,                                                        // 45: Enable Normalization (ACE-Step v1.5 new param, default false)
-    0.0,                                                          // 46: Normalization DB (ACE-Step v1.5 new param, default 0.0)
-    0.0,                                                          // 47: Latent Shift (ACE-Step v1.5 new param, default 0.0)
-    1.0,                                                          // 48: Latent Rescale (ACE-Step v1.5 new param, default 1.0)
-    params.autogen ?? false,                                      // 49: AutoGen (visible last param)
+    params.getLrc ?? false,                                       // 41: Auto LRC (timestamped lyrics)
+    params.scoreScale ?? 0.5,                                     // 42: Quality Score Sensitivity (0.01-1.0)
+    params.lmBatchChunkSize ?? 8,                                 // 43: LM Batch Chunk Size
+    params.trackName || null,                                     // 44: Track Name
+    params.completeTrackClasses || [],                            // 45: Track Names
+    true,                                                         // 46: Enable Normalization (ACE-Step v1.5, default true)
+    -1.0,                                                         // 47: Normalization DB (ACE-Step v1.5, default -1.0)
+    0.0,                                                          // 48: Latent Shift (ACE-Step v1.5, default 0.0)
+    1.0,                                                          // 49: Latent Rescale (ACE-Step v1.5, default 1.0)
+    params.autogen ?? false,                                      // 50: AutoGen
     // Note: current_batch_index, total_batches, batch_queue, generation_params_state
     // are hidden Gradio state variables and must NOT be passed via client.predict()
   ];
@@ -365,6 +365,40 @@ export async function checkSpaceHealth(): Promise<boolean> {
   return isGradioAvailable();
 }
 
+// ---------------------------------------------------------------------------
+// Model switching — call /v1/init to change the active DiT model
+// ---------------------------------------------------------------------------
+
+async function getActiveModel(): Promise<string | null> {
+  try {
+    const res = await fetch(`${ACESTEP_API}/v1/models`);
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    const models = data?.data?.models || data?.models || [];
+    return models[0]?.name || null;
+  } catch {
+    return null;
+  }
+}
+
+async function switchModelIfNeeded(ditModel: string): Promise<void> {
+  const activeModel = await getActiveModel();
+  if (activeModel === ditModel) return; // already loaded, no-op
+
+  console.log(`[Model] Switching from '${activeModel ?? 'unknown'}' to '${ditModel}'`);
+  const res = await fetch(`${ACESTEP_API}/v1/init`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: ditModel, init_llm: false }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(`Model switch to '${ditModel}' failed: ${res.status} ${err}`);
+  }
+  console.log(`[Model] Switched to '${ditModel}'`);
+}
+
 // Discover endpoints (for compatibility)
 export async function discoverEndpoints(): Promise<unknown> {
   return { provider: 'acestep-gradio', endpoint: ACESTEP_API };
@@ -472,6 +506,12 @@ async function processGenerationViaGradio(
   params: GenerationParams,
   job: ActiveJob,
 ): Promise<void> {
+  // Switch DiT model if a specific one was requested
+  if (params.ditModel) {
+    job.stage = `Loading model ${params.ditModel}...`;
+    await switchModelIfNeeded(params.ditModel);
+  }
+
   const client = await getGradioClient();
   const args = await buildGradioArgs(params);
 
@@ -552,7 +592,7 @@ async function processGenerationViaGradio(
 
   const finalDuration = actualDuration > 0
     ? actualDuration
-    : (metas.duration || params.duration || 60);
+    : (metas.duration || params.duration || 0);
 
   job.status = 'succeeded';
   job.result = {
@@ -703,7 +743,7 @@ async function processGenerationViaPython(
       console.warn(`Job ${jobId}: Failed to cleanup output dir`, cleanupError);
     }
 
-    const finalDuration = actualDuration > 0 ? actualDuration : (params.duration && params.duration > 0 ? params.duration : 60);
+    const finalDuration = actualDuration > 0 ? actualDuration : (params.duration && params.duration > 0 ? params.duration : 0);
 
     job.status = 'succeeded';
     job.result = {
